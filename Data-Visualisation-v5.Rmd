@@ -1,0 +1,1417 @@
+---
+title: "Dépenses de médicaments en 2022"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    social: menu
+    source_code: embed
+    runtime: shiny
+---
+
+```{r Initialisation, include=F}
+library(base)
+library(caret)
+library(corrplot)
+library(dplyr)
+library(forcats)
+library(ggplot2)
+library(glmnet)
+library(leaflet)
+library(Metrics)
+library(plotly)
+library(randomForest)
+library(readxl)
+library(rsconnect)
+library(sf)
+library(shiny)
+library(tidyr)
+library(vcd)
+ 
+```
+
+```{r Chargement de la base, include=F}
+Base0 = read.csv("OPEN_MEDIC_2022.CSV", header = TRUE, sep=";")
+```
+
+```{r Tranformation de BEN_REG, include=F}
+Base0$BEN_REG <- as.character(Base0$BEN_REG)
+Base0$BEN_REG[Base0$BEN_REG == "5"] <- "05"
+```
+
+```{r Transformation de REM, BOITES et l_ATC1, include=F}
+#colSums(is.na(Base0))
+
+Base0$REM = gsub("\\.", "", Base0$REM)
+Base0$BSE = gsub("\\.", "", Base0$BSE)
+
+Base0$REM = as.numeric(gsub(",", ".", Base0$REM))
+Base0$BSE = as.numeric(gsub(",", ".", Base0$BSE))
+
+Base0$l_ATC1 <- paste0(toupper(substring(Base0$l_ATC1, 1, 1)), tolower(substring(Base0$l_ATC1, 2)))
+
+Base0$l_ATC1[Base0$l_ATC1 == "Hormones systemiques, a l exclusion des hormones sexuelles et des insulines"] <- "Hormones systemiques"
+
+#colSums(is.na(Base0))
+```
+
+```{r Création de Class_Remb, include=F}
+Base0$Part_Remb = Base0$REM / Base0$BSE * 100
+
+# Renommez les classes en utilisant levels
+intervalle_labels <- c("0-10%", "10-20%", "20-30%", "30-40%", "40-50%", "50-60%", "60-70%", "70-80%", "80-90%", "90-100%")
+
+# Utilisez la fonction cut pour créer 10 classes
+Base0$Class_Remb <- cut(Base0$Part_Remb, breaks = c(0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100), 
+                    right = FALSE, labels = intervalle_labels, include.lowest = TRUE)
+```
+
+```{r Suppression de valeurs aberrantes, include=F}
+# Supprimer les 200 lignes correspondant à des Class_Remb = NA car Part_Remb < 0 ou > 100
+
+Val_supprimées = Base0[is.na(Base0$Class_Remb),]
+Base = na.omit(Base0, Base0$Class_Remb)
+
+Val_supprimées = rbind(Val_supprimées, Base[(Base$REM < 0), ])
+Base = Base[(Base$REM >= 0), ]
+```
+
+```{r Nombre de modalités, include=F}
+modalites_par_variable <- sapply(Base, function(col) length(unique(col)))
+#modalites_par_variable
+```
+
+```{r Sélection des variables et aggrégation des données, include=F}
+message("Nombre de lignes : ", nrow(Base))
+
+Base_agg <- Base %>%
+  group_by(l_ATC1, L_ATC2, L_ATC3, L_ATC4, L_ATC5, age, sexe, BEN_REG, Class_Remb, TOP_GEN) %>%
+  summarize(BOITES = sum(BOITES),
+            REM = sum(REM),
+            BSE = sum(BSE))
+
+#Variables enlevées : CIP13, l_cip13, GEN_NUM,
+
+#message("Nombre de lignes : ", nrow(Base_agg))
+```
+
+```{r Vérifications, include=F}
+sum(Base$REM) == sum(Base_agg$REM)
+sum(Base$BOITES) == sum(Base_agg$BOITES)
+sum(Base$BSE) == sum(Base_agg$BSE)
+```
+
+```{r Suppression de modalités, include=F}
+df <- Base_agg[Base_agg$age == 99 | Base_agg$sexe == 9 | Base_agg$BEN_REG == "0" | Base_agg$BEN_REG == "99" | Base_agg$TOP_GEN == 9, ]
+
+df1 <- Base_agg[Base_agg$age == 99, ]
+df2 <- Base_agg[Base_agg$sexe == 9, ]
+df3 <- Base_agg[Base_agg$BEN_REG == "0", ]
+df4 <- Base_agg[Base_agg$BEN_REG == "99", ]
+df5 <- Base_agg[Base_agg$TOP_GEN == 9, ]
+
+print(nrow(df))
+#print(nrow(df1))
+#print(nrow(df2))
+#print(nrow(df3))
+print(nrow(df4))
+#print(nrow(df5))
+print("")
+print(round(sum(df$BOITES)/sum(Base_agg$BOITES)*100, 2))
+#print(round(sum(df1$BOITES)/sum(Base_agg$BOITES)*100, 2))
+#print(round(sum(df2$BOITES)/sum(Base_agg$BOITES)*100, 2))
+#print(round(sum(df3$BOITES)/sum(Base_agg$BOITES)*100, 2))
+print(round(sum(df4$BOITES)/sum(Base_agg$BOITES)*100, 2))
+#print(round(sum(df5$BOITES)/sum(Base_agg$BOITES)*100, 2))
+print("")
+print(round(sum(df$REM)/sum(Base_agg$REM)*100, 2))
+#print(round(sum(df1$REM)/sum(Base_agg$REM)*100, 2))
+#print(round(sum(df2$REM)/sum(Base_agg$REM)*100, 2))
+#print(round(sum(df3$REM)/sum(Base_agg$REM)*100, 2))
+print(round(sum(df4$REM)/sum(Base_agg$REM)*100, 2))
+#print(round(sum(df5$REM)/sum(Base_agg$REM)*100, 2))
+
+Base_agg <- subset(Base_agg, !(age == 99 | sexe == 9 | BEN_REG == "0" | BEN_REG == "99" | TOP_GEN == 9))
+```
+
+```{r Regions : association code-nom, include=F}
+france_sf <- sf::st_read("regions.geojson")
+
+Regions <- france_sf$nom
+BEN_REG <- france_sf$code
+reg = data.frame(Regions, BEN_REG)
+
+reg$BEN_REG[reg$BEN_REG %in% c("01", "02", "03", "04", "06")] <- "05"
+reg[reg$BEN_REG == "05", "Regions"] <- "Régions et Départements d'outre-mer"
+
+reg$BEN_REG[reg$BEN_REG == "94"] <- "93"
+reg[reg$BEN_REG == "93", "Regions"] <- "Provence-Alpes-Côte d'Azur et Corse"
+
+reg <- unique(reg)
+```
+
+```{r Nombre d habitants, include=F}
+Habt = read_excel("estim-pop-nreg-sexe-gca-1975-2023.xlsx", sheet="2023")
+
+Habt$Régions[Habt$Régions == "DOM"] <- "Régions et Départements d'outre-mer"
+Habt$Régions[Habt$Régions == "Centre-Val-de-Loire"] <- "Centre-Val de Loire"
+
+# Fusionner les données de population avec les données spatiales
+Habt_full <- left_join(reg, Habt, by = c("Regions" = "Régions"))
+
+# Sélections de colonnes
+Habt = cbind(Habt_full[,1:2],Habt_full[,8])
+Habt = rename(Habt, Nb_hbts=`Habt_full[, 8]`)
+Habt$Part_hbts = round(Habt$Nb_hbts / sum(Habt$Nb_hbts) * 100, 1)
+Habt = Habt[,2:4]
+```
+
+```{r Boites et Montants par Regions, include=F}
+Base_reg = summarize(group_by(Base, BEN_REG), BOITES = sum(BOITES), REM = sum(REM))
+
+Base_reg$Part_BOITES = round(Base_reg$BOITES / sum(Base_reg$BOITES) * 100, 1)
+Base_reg$Part_REM = round(Base_reg$REM / sum(Base_reg$REM) * 100, 1)
+
+#print(sum(Base_reg$Part_BOITES))
+#print(sum(Base_reg$Part_REM))
+```
+
+```{r Boites et Montants par Groupe Principal Anatomique, include=F}
+Boite_Reg_l_ATC1 = Base_agg %>%
+  group_by(l_ATC1, BEN_REG) %>%
+  summarize(BOITES = sum(BOITES)) %>%
+  group_by(BEN_REG) %>%
+  mutate(Part_l_ATC1_BOITES = round(BOITES / sum(BOITES) * 100, 1)) %>%
+  ungroup()
+
+Rem_Reg_l_ATC1 = Base_agg %>%
+  group_by(l_ATC1, BEN_REG) %>%
+  summarize(REM = sum(REM)) %>%
+  group_by(BEN_REG) %>%
+  mutate(Part_l_ATC1_REM = round(REM / sum(REM) * 100, 1)) %>%
+  ungroup()
+
+
+
+Boite_Reg_l_ATC1 = Boite_Reg_l_ATC1 %>%
+  group_by(BEN_REG) %>%
+  slice_max(order_by = BOITES) %>%
+  ungroup()
+
+Rem_Reg_l_ATC1 = Rem_Reg_l_ATC1 %>%
+  group_by(BEN_REG) %>%
+  slice_max(order_by = REM) %>%
+  ungroup()
+
+
+
+Boite_Reg_l_ATC1 <- Boite_Reg_l_ATC1 %>% select(-BOITES)
+Rem_Reg_l_ATC1 <- Rem_Reg_l_ATC1 %>% select(-REM)
+
+colnames(Boite_Reg_l_ATC1)[1] <- c("l_ATC1_Boite")
+colnames(Rem_Reg_l_ATC1)[1] <- c("l_ATC1_Rem")
+```
+
+```{r Boites et Montants par sexe, include=F}
+Base_reg_sexe = Base_agg %>%
+  group_by(sexe, BEN_REG) %>%
+  summarize(BOITES = sum(BOITES),
+            REM = sum(REM))
+
+
+Base_reg_sexe <- Base_reg_sexe %>%
+  mutate(sexe = recode(sexe,
+    "1" = "Homme",
+    "2" = "Femme"
+  ))
+
+
+Boite_Reg_Sexe <- Base_reg_sexe[, !names(Base_reg_sexe) %in% c("REM")]
+Boite_Reg_Sexe <- Boite_Reg_Sexe %>%
+  pivot_wider(names_from = sexe, values_from = BOITES)
+
+Rem_Reg_Sexe <- Base_reg_sexe[, !names(Base_reg_sexe) %in% c("BOITES")]
+Rem_Reg_Sexe <- Rem_Reg_Sexe %>%
+  pivot_wider(names_from = sexe, values_from = REM)
+
+
+Boite_Reg_Sexe$Part_Homme_Boite = round(Boite_Reg_Sexe$Homme / (Boite_Reg_Sexe$Homme + Boite_Reg_Sexe$Femme) * 100, 1)
+Boite_Reg_Sexe$Part_Femme_Boite = round(Boite_Reg_Sexe$Femme / (Boite_Reg_Sexe$Homme + Boite_Reg_Sexe$Femme) * 100, 1)
+
+Rem_Reg_Sexe$Part_Homme_Rem = round(Rem_Reg_Sexe$Homme / (Rem_Reg_Sexe$Homme + Rem_Reg_Sexe$Femme) * 100, 1)
+Rem_Reg_Sexe$Part_Femme_Rem = round(Rem_Reg_Sexe$Femme / (Rem_Reg_Sexe$Homme + Rem_Reg_Sexe$Femme) * 100, 1)
+
+
+colnames(Boite_Reg_Sexe)[2:3] <- c("Homme_Boite","Femme_Boite")
+colnames(Rem_Reg_Sexe)[2:3] <- c("Homme_Rem","Femme_Rem")
+
+Reg_Sexe <- left_join(Boite_Reg_Sexe, Rem_Reg_Sexe, by = "BEN_REG")
+```
+
+```{r Boites et Montants par age, include=F}
+Base_reg_age = Base_agg %>%
+  group_by(age, BEN_REG) %>%
+  summarize(BOITES = sum(BOITES),
+            REM = sum(REM))
+
+
+Boite_Reg_Age <- Base_reg_age[, !names(Base_reg_age) %in% c("REM")]
+Boite_Reg_Age <- Boite_Reg_Age %>%
+  pivot_wider(names_from = age, values_from = BOITES)
+
+Rem_Reg_Age <- Base_reg_age[, !names(Base_reg_age) %in% c("BOITES")]
+Rem_Reg_Age <- Rem_Reg_Age %>%
+  pivot_wider(names_from = age, values_from = REM)
+
+
+Boite_Reg_Age$Part_0_Boite = round(Boite_Reg_Age$`0` / (Boite_Reg_Age$`0` + Boite_Reg_Age$`20` + Boite_Reg_Age$`60`) * 100, 1)
+Boite_Reg_Age$Part_20_Boite = round(Boite_Reg_Age$`20` / (Boite_Reg_Age$`0` + Boite_Reg_Age$`20` + Boite_Reg_Age$`60`) * 100, 1)
+Boite_Reg_Age$Part_60_Boite = round(Boite_Reg_Age$`60` / (Boite_Reg_Age$`0` + Boite_Reg_Age$`20` + Boite_Reg_Age$`60`) * 100, 1)
+
+Rem_Reg_Age$Part_0_Rem = round(Rem_Reg_Age$`0` / (Rem_Reg_Age$`0` + Rem_Reg_Age$`20` + Rem_Reg_Age$`60`) * 100, 1)
+Rem_Reg_Age$Part_20_Rem = round(Rem_Reg_Age$`20` / (Rem_Reg_Age$`0` + Rem_Reg_Age$`20` + Rem_Reg_Age$`60`) * 100, 1)
+Rem_Reg_Age$Part_60_Rem = round(Rem_Reg_Age$`60` / (Rem_Reg_Age$`0` + Rem_Reg_Age$`20` + Rem_Reg_Age$`60`) * 100, 1)
+
+
+colnames(Boite_Reg_Age)[2:4] <- c("0_Boite","20_Boite","60_Boite")
+colnames(Rem_Reg_Age)[2:4] <- c("0_Rem","20_Rem","60_Rem")
+
+Reg_Age <- left_join(Boite_Reg_Age, Rem_Reg_Age, by = "BEN_REG")
+```
+
+```{r Chargement des données geojson, include=F}
+france_sf <- sf::st_read("regions.geojson")
+
+france_sf$code[france_sf$code %in% c("01", "02", "03", "04", "06")] <- "05"
+france_sf[france_sf$code == "05", "nom"] <- "Régions et Départements d'outre-mer"
+
+france_sf$code[france_sf$code == "94"] <- "93"
+france_sf[france_sf$code == "93", "nom"] <- "Provence-Alpes-Côte d'Azur et Corse"
+```
+
+```{r Aggrégation des bases de données, include=F}
+# Fusionner les données de population avec les données spatiales
+france_sf <- left_join(france_sf, Base_reg, by = c("code" = "BEN_REG"))
+france_sf <- left_join(france_sf, Habt, by = c("code" = "BEN_REG"))
+france_sf <- left_join(france_sf, Reg_Sexe, by = c("code" = "BEN_REG"))
+france_sf <- left_join(france_sf, Reg_Age, by = c("code" = "BEN_REG"))
+france_sf <- left_join(france_sf, Boite_Reg_l_ATC1, by = c("code" = "BEN_REG"))
+france_sf <- left_join(france_sf, Rem_Reg_l_ATC1, by = c("code" = "BEN_REG"))
+
+#names(france_sf)
+```
+
+
+# Carte
+
+## Row
+
+### Cliquez sur les régions afin d'avoir des informations supplémentaires.
+
+```{r,echo=F}
+ui <- fluidPage(
+  radioButtons("variable", "Choix de variable pour la légende :",
+               choices = c("Nombre de boîtes délivrées" = "BOITES", "Montant remboursé" = "REM"),
+               selected = "BOITES"),
+  leafletOutput("france_map")
+)
+
+server <- function(input, output) {
+
+  output$france_map <- renderLeaflet({
+
+    # Sélectionner la variable en fonction de la valeur du bouton radio
+    selected_variable <- switch(input$variable,
+                                "BOITES" = france_sf$BOITES,
+                                "REM" = france_sf$REM)
+
+    # Créer une correspondance entre les valeurs et les régions
+    color_data <- data.frame(nom = france_sf$nom, selected_variable)
+
+    # Définir une palette de couleurs basée sur la variable sélectionnée
+    color_palette <- colorNumeric("Blues", domain = selected_variable)
+
+    leaflet(data = france_sf) %>%
+      addTiles() %>%
+      addPolygons(fillColor = ~color_palette(selected_variable),
+                  color = "black",
+                  fillOpacity = 0.7,
+                  weight = 1,
+                  smoothFactor = 0.5,
+                  highlight = highlightOptions(weight = 2,
+                                               color = "red",
+                                               fillOpacity = 0.7,
+                                               bringToFront = TRUE),
+                  popup = ~paste("<strong>", nom, "</strong><br><br>",
+                                 "<strong>", "Nombre d'habitants : ","</strong>",
+                                 format(Nb_hbts, big.mark = " ", scientific = FALSE),
+                                 "(", format(Part_hbts, big.mark = " ", scientific = FALSE), "% )", "<br><br>",
+
+                                 "<strong>", "Nombre de boîtes délivrées : ","</strong>",
+                                 format(BOITES, big.mark = " ", scientific = FALSE),
+                                 "(", format(Part_BOITES, big.mark = " ", scientific = FALSE), "% )", "<br>",
+
+                                 "<strong>","     Répartition en fonction du genre : ","</strong>"," Femme (",
+                                 format(Part_Femme_Boite, big.mark = " ", scientific = FALSE),
+                                 "% ), Homme (", format(Part_Homme_Boite, big.mark = " ", scientific = FALSE), "% )", "<br>",
+
+                                 "<strong>","     Répartition en fonction de l'âge : ,","</strong>"," 0-19 ans (",
+                                 format(Part_0_Boite, big.mark = " ", scientific = FALSE),
+                                 "% ), 20-59 ans (", format(Part_20_Boite, big.mark = " ", scientific = FALSE), "% ), 60 ans et + (",
+                                 format(Part_60_Boite, big.mark = " ", scientific = FALSE), "% )", "<br>",
+
+                                 "<strong>","     Groupe Principal Anatomique le plus représenté : ","</strong> ",
+                                 format(l_ATC1_Boite, big.mark = " ", scientific = FALSE),
+                                 "(", format(Part_l_ATC1_BOITES, big.mark = " ", scientific = FALSE), "% ),", "<br><br>",
+
+                                 "<strong>"," Montant Remboursé : ","</strong> ",
+                                 format(REM, big.mark = " ", scientific = FALSE),
+                                 "€ (", format(Part_REM, big.mark = " ", scientific = FALSE), "% )", "<br>",
+
+                                 "<strong>","     Répartition en fonction du genre : ","</strong>"," Femme (",
+                                 format(Part_Femme_Rem, big.mark = " ", scientific = FALSE),
+                                 "% ), Homme (", format(Part_Homme_Rem, big.mark = " ", scientific = FALSE), "% )", "<br>",
+
+                                 "<strong>","     Répartition en fonction de l'âge : ","</strong>"," 0-19 ans (",
+                                 format(Part_0_Rem, big.mark = " ", scientific = FALSE),
+                                 "% ), 20-59 ans (", format(Part_20_Rem, big.mark = " ", scientific = FALSE), "% ), 60 ans et + (",
+                                 format(Part_60_Rem, big.mark = " ", scientific = FALSE), "% )", "<br>",
+
+                                 "<strong>","     Groupe Principal Anatomique le plus représenté : ","</strong> ",
+                                 format(l_ATC1_Rem, big.mark = " ", scientific = FALSE),
+                                 "(", format(Part_l_ATC1_REM, big.mark = " ", scientific = FALSE), "% )")) %>%
+      setView(lng = 2.896372, lat = 47.694977, zoom = 5) %>%
+      addLegend(pal = color_palette, values = selected_variable, title = input$variable)
+  })
+}
+
+shinyApp(ui, server)
+
+```
+
+### Matrice de corrélation 
+
+```{r, include=F}
+Base_graphe = data.frame(Base_agg)
+
+Base_graphe$age <- as.character(Base_graphe$age)
+Base_graphe$sexe <- as.character(Base_graphe$sexe)
+Base_graphe$BEN_REG <- as.character(Base_graphe$BEN_REG)
+Base_graphe$Class_Remb <- as.character(Base_graphe$Class_Remb)
+Base_graphe$TOP_GEN <- as.character(Base_graphe$TOP_GEN)
+```
+
+```{r Selection des variables catégorielles, include=F}
+Base_cor = data.frame(Base_graphe)
+
+# Conversion des variables catégorielles en facteurs
+variables_categorielles <- c('l_ATC1', 'L_ATC2', 'L_ATC3', 'L_ATC4', 'L_ATC5', 'TOP_GEN', 'age', 'sexe', 'BEN_REG', 'Class_Remb')
+
+Base_cor[variables_categorielles] <- lapply(Base_cor[variables_categorielles], factor)
+
+ # pour supprimer les lignes avec des valeurs manquantes
+Base_cor <- na.omit(Base_cor)
+
+Base_cat = Base_cor[variables_categorielles]
+```
+
+```{r,echo=F}
+# Fonction pour calculer Cramer's V entre deux variables catégorielles
+calculate_cramers_v <- function(var1, var2) {
+  crosstab <- table(var1, var2)
+  assocstats(crosstab)$cramer
+}
+
+# Initialiser une matrice vide pour stocker les résultats
+cramer_matrix <- matrix(NA, nrow = ncol(Base_cat), ncol = ncol(Base_cat), dimnames = list(names(Base_cat), names(Base_cat)))
+
+# Calculer Cramer's V pour chaque paire de variables catégorielles
+for (i in 1:(ncol(Base_cat)-1)) {
+  for (j in (i+1):ncol(Base_cat)) {
+    cramer_matrix[i, j] <- calculate_cramers_v(Base_cat[[i]], Base_cat[[j]])
+    cramer_matrix[j, i] <- cramer_matrix[i, j]
+  }
+}
+
+# Tracé de la heatmap avec corrplot
+corrplot(cramer_matrix, method = "color", addCoef.col = TRUE, tl.col = "black", number.cex = 0.7, col = colorRampPalette(c("blue", "white", "red"))(100))
+
+```
+
+# Nombre de boîtes
+
+## Row
+
+### 1
+
+```{r,echo=F}
+# Créer une fonction pour formater les valeurs en utilisant des unités abrégées
+format_labels <- function(x) {
+  ifelse(x >= 1e6, paste0(as.integer(x / 1e6), "M"),
+    ifelse(x >= 1e3, paste0(as.integer(x / 1e3), "K"), as.character(x)))
+}
+
+# Regrouper les données par groupe principal anatomique et faire la somme des boîtes vendues
+grouped_data <- Base_graphe %>%
+  group_by(l_ATC1) %>%
+  summarise(BOITES = sum(BOITES))
+
+# Trier les données par nombre de boîtes vendues de manière décroissante
+top5 <- grouped_data %>%
+  arrange(desc(BOITES)) %>%
+  head(5)
+
+# Créer un graphique à barres pour les cinq groupes principaux anatomiques avec le plus grand nombre de boîtes vendues en utilisant une palette de couleurs
+# Créer un graphique à barres pour les cinq groupes principaux anatomiques avec le plus grand nombre de boîtes vendues en utilisant une palette de couleurs
+ggplot(top5, aes(x = fct_reorder(l_ATC1, -BOITES), y = BOITES, fill = l_ATC1)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Top 5 groupes principaux anatomiques des médicaments en terme de boîtes délivrées",
+       x = "Groupe anatomique",
+       y = "Nombre de boîtes délivrées") +
+  scale_fill_brewer(palette = "Set3") +  # Utiliser une palette de couleurs
+  scale_y_continuous(limits = c(0, max(top5$BOITES) + 50000000)) +  # Définir les bornes pour l'axe y
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10.5),  # Définir la taille du texte de l'axe x
+        axis.text.y = element_text(size = 10.5),  # Définir la taille du texte de l'axe y
+        plot.title = element_text(size = 12, hjust = 0.5)) +
+  geom_text(aes(label = format_labels(BOITES)), vjust = -0.5, size = 3.5) +
+  guides(fill = FALSE)  # Supprimer la légende
+
+
+```
+
+### 2
+
+```{r,echo=F}
+# Regrouper les données par région et faire la somme des boîtes vendues
+region_data <- Base_graphe %>%
+  group_by(BEN_REG) %>%
+  summarise(BOITES = sum(BOITES))
+
+# Trier les données par nombre de boîtes vendues de manière décroissante
+top_region <- region_data %>%
+  arrange(desc(BOITES))
+
+top_region <- left_join(top_region, reg, by = "BEN_REG")
+
+# Définir une palette de couleurs personnalisée pour les régions
+my_colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+               "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+               "#aec7e8", "#ffbb78", "#98df8a", "#ff9896")
+
+# Créer un graphique à barres pour le nombre de boîtes délivrées par région de résidence des bénéficiaires
+ggplot(top_region, aes(x = fct_reorder(Regions, -BOITES), y = BOITES, fill = Regions)) +
+    geom_bar(stat = "identity") +
+    labs(title = "Nombre de boîtes délivrées par région de résidence des bénéficiaires",
+         x = "Région",
+         y = "Nombre de boîtes délivrées") +
+    scale_fill_manual(values = my_colors) +  # Utiliser la palette de couleurs personnalisée
+    scale_y_continuous(limits = c(0, max(top_region$BOITES) + 10000000)) +  # Définir les bornes pour l'axe y
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10.5),  # Définir la taille du texte de l'axe x
+          axis.text.y = element_text(size = 10.5),  # Définir la taille du texte de l'axe y
+          plot.title = element_text(size = 12, hjust = 0.5)) +
+    geom_text(aes(label = format_labels(BOITES)), vjust = -0.5, size = 3.5) +
+    guides(fill = FALSE)  # Supprimer la légende
+
+```
+
+### 3
+
+```{r,echo=F}
+# Regrouper les données par type de médicament et faire la somme des boîtes achetées
+gen_data <- Base_graphe %>%
+  group_by(TOP_GEN) %>%
+  summarise(BOITES = sum(BOITES))
+
+gen_data$TOP_GEN[gen_data$TOP_GEN == "0"] <- "Pas dans une famille de générique"
+gen_data$TOP_GEN[gen_data$TOP_GEN == "1"] <- "Générique"
+gen_data$TOP_GEN[gen_data$TOP_GEN == "4"] <- "Princep de la famille des génériques"
+
+# Créer un histogramme pour le nombre de boîtes achetées par type de médicament en utilisant la palette "Set3"
+ggplot(gen_data, aes(x = fct_reorder(TOP_GEN, -BOITES), y = BOITES, fill = TOP_GEN)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Nombre de boîtes délivrées par type de médicament",
+       x = "Top Générique",
+       y = "Nombre de boîtes délivrées") +
+  scale_fill_brewer(palette = "Set3") +  # Utiliser la palette "Set3"
+  scale_y_continuous(limits = c(0, max(gen_data$BOITES) + 100000000)) +  # Définir les bornes pour l'axe y
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 0.5, size = 10.5),  # Définir la taille du texte de l'axe x
+        axis.text.y = element_text(size = 10.5),  # Définir la taille du texte de l'axe y
+        plot.title = element_text(size = 12, hjust = 0.5)) +
+  geom_text(aes(label = format_labels(BOITES)), vjust = -0.5, size = 4)+
+  guides(fill = FALSE)  # Supprimer la légende
+```
+
+## Row
+
+### 4
+
+```{r,echo=F}
+
+# Regrouper les données par sexe et faire la somme des boîtes achetées
+sex_data <- Base_graphe %>%
+  group_by(sexe) %>%
+  summarise(BOITES = sum(BOITES))
+
+
+# Créer un graphique en secteurs (camembert) pour les sexes avec le nombre de boîtes achetées
+ggplot(sex_data, aes(x = "", y = BOITES, fill = sexe)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +  # Convertir en camembert
+  labs(title = "Nombre de boîtes délivrées par genre",
+       fill = "Sexe") +
+  scale_fill_brewer(palette = "Set3") +  # Utiliser une palette de couleurs prédéfinie
+  theme_void() +  # Supprimer le fond et les axes
+  geom_text(aes(label = format_labels(BOITES)), position = position_stack(vjust = 0.5), size = 5) +
+  theme(plot.title = element_text(hjust = 0.5),  # Centrer le titre
+        legend.text = element_text(size = 11),   # Ajuster la taille du texte de la légende
+        legend.title = element_text(size = 11)) # Ajuster la taille du titre de la légende
+
+```
+
+### 5
+
+```{r,echo=F}
+# Regrouper les données par tranche d'âge et faire la somme des boîtes achetées
+age_data <- Base_graphe %>%
+  group_by(age) %>%
+  summarise(BOITES = sum(BOITES))
+
+age_data$age[age_data$age == "0"] <- "0-19 ans"
+age_data$age[age_data$age == "20"] <- "20-59 ans"
+age_data$age[age_data$age == "60"] <- "60 ans et +"
+
+# Créer un histogramme pour le nombre de boîtes achetées par tranche d'âge en utilisant la palette "Set3"
+ggplot(age_data, aes(x = age, y = BOITES, fill = age)) +
+    geom_bar(stat = "identity") +
+    labs(title = "Nombre de boîtes délivrées par tranche d'âge",
+         x = "Tranche d'âge",
+         y = "Nombre de boîtes délivrées") +
+    scale_fill_brewer(palette = "Set3") +  # Utiliser la palette "Set3"
+    scale_y_continuous(limits = c(0, max(age_data$BOITES) + 100000000)) +  # Définir les bornes pour l'axe y
+    theme_minimal() +
+    theme(axis.text.x = element_text(hjust = 0.5, size = 10.5),  # Définir la taille du texte de l'axe x
+        axis.text.y = element_text(size = 10.5),  # Définir la taille du texte de l'axe y
+        plot.title = element_text(size = 12, hjust = 0.5)) +
+    geom_text(aes(label = format_labels(BOITES)), vjust = -0.5, size = 4)+
+    guides(fill = FALSE)  # Supprimer la légende
+```
+
+### 6
+
+```{r,echo=F}
+# Regrouper les données par classe de remboursement et faire la somme des boîtes achetées
+class_remb_data <- Base_graphe %>%
+  group_by(Class_Remb) %>%
+  summarise(BOITES = sum(BOITES))
+
+
+# Créer un histogramme pour le nombre de boîtes achetées par classe de remboursement en utilisant la palette "Set3"
+ggplot(class_remb_data, aes(x = Class_Remb, y = BOITES, fill = Class_Remb)) +
+    geom_bar(stat = "identity") +
+    labs(title = "Nombre de boîtes délivrées par classe de remboursement",
+         x = "Classe de remboursement",
+         y = "Nombre de boîtes délivrées") +
+    scale_fill_brewer(palette = "Set3") +  # Utiliser la palette "Set3"
+    scale_y_continuous(limits = c(0, max(class_remb_data$BOITES) + 50000000)) +  # Définir les bornes pour l'axe y
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10.5),  # Définir la taille du texte de l'axe x
+          axis.text.y = element_text(size = 10.5),  # Définir la taille du texte de l'axe y
+          plot.title = element_text(size = 12, hjust = 0.5)) +
+    geom_text(aes(label = format_labels(BOITES)), vjust = -0.5, size = 3.5)+
+guides(fill = FALSE)  # Supprimer la légende
+```
+
+# Remboursements
+
+## Row
+
+### 1
+
+```{r,echo=F}
+
+# Créer une fonction pour formater les valeurs en utilisant des unités abrégées
+format_labels_euro <- function(x) {
+  ifelse(x >= 1e6, paste0(as.integer(x / 1e6), "M €"),
+    ifelse(x >= 1e3, paste0(as.integer(x / 1e3), "K €"), as.character(x)))
+}
+
+# Regrouper les données par groupe principal anatomique et faire la somme des montants de remboursements 
+grouped_data <- Base_graphe %>%
+  group_by(l_ATC1) %>%
+  summarise(Total_Rembourse = sum(REM))
+
+# Trier les données par montants de remboursements de manière décroissante
+top5 <- grouped_data %>%
+  arrange(desc(Total_Rembourse)) %>%
+  head(5)
+
+ggplot(top5, aes(x = fct_reorder(l_ATC1, Total_Rembourse), y = Total_Rembourse, fill = l_ATC1)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Top 5 groupes principaux anatomiques des médicaments les plus remboursés",
+       x = "Groupe anatomique",
+       y = "Montant de remboursement (€)") +
+  scale_fill_brewer(palette = "Set3") +  # Utiliser une palette de couleurs
+  scale_y_continuous(limits = c(0, max(top5$Total_Rembourse) + 500000000)) +  # Définir les bornes pour l'axe y
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 55, hjust = 1, size = 10.5),  # Définir la taille du texte de l'axe x
+        axis.text.y = element_text(size = 10.5),  # Définir la taille du texte de l'axe y
+        plot.title = element_text(size = 12, hjust = 0.5)) +
+  geom_text(aes(label = format_labels(Total_Rembourse)), vjust = -0.5, size = 3.5) +
+  guides(fill = FALSE)  # Supprimer la légende
+
+```
+
+### 2
+
+```{r,echo=F}
+
+# Regrouper les données par groupe principal anatomique et faire la somme des montants de remboursements 
+grouped_data <- Base_graphe %>%
+  group_by(BEN_REG) %>%
+  summarise(Total_Rembourse = sum(REM))
+
+grouped_data <- left_join(grouped_data, reg, by = "BEN_REG")
+
+# Définir une palette de couleurs personnalisée pour les régions
+my_colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+               "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+               "#aec7e8", "#ffbb78", "#98df8a", "#ff9896")
+
+# Créer un graphique à barres pour le nombre de boîtes délivrées par région de résidence des bénéficiaires
+ggplot(grouped_data, aes(x = fct_reorder(Regions, -Total_Rembourse), y = Total_Rembourse, fill = Regions)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Les montants de remboursements par région de résidence des bénéficiaires",
+       x = "Région",
+       y = "Montant de remboursement (€)") +
+  scale_fill_manual(values = my_colors) +  # Utiliser la palette de couleurs personnalisée
+  scale_y_continuous(limits = c(0, max(grouped_data$Total_Rembourse) + 100000000)) +  # Définir les bornes pour l'axe y
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10.5),  # Définir la taille du texte de l'axe x
+        axis.text.y = element_text(size = 10.5),  # Définir la taille du texte de l'axe y
+        plot.title = element_text(size = 12, hjust = 0.5)) +
+  geom_text(aes(label = format_labels(Total_Rembourse)), vjust = -0.5, size = 3) +
+  guides(fill = FALSE)  # Supprimer la légende
+```
+
+### 3
+
+```{r,echo=F}
+# Regrouper les données par type de médicament et faire la somme des boîtes achetées
+gen_data <- Base_graphe %>%
+  group_by(TOP_GEN) %>%
+  summarise(Total_Rembourse = sum(REM))
+
+gen_data$TOP_GEN[gen_data$TOP_GEN == "0"] <- "Pas dans une famille de générique"
+gen_data$TOP_GEN[gen_data$TOP_GEN == "1"] <- "Générique"
+gen_data$TOP_GEN[gen_data$TOP_GEN == "4"] <- "Princep de la famille des génériques"
+
+# Créer un histogramme pour le nombre de boîtes achetées par type de médicament en utilisant la palette "Set3"
+ggplot(gen_data, aes(x = fct_reorder(TOP_GEN, -Total_Rembourse), y = Total_Rembourse, fill = TOP_GEN)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Nombre de boîtes délivrées par type de médicament",
+       x = "Top Générique",
+       y = "Nombre de boîtes délivrées") +
+  scale_fill_brewer(palette = "Set3") +  # Utiliser la palette "Set3"
+  scale_y_continuous(limits = c(0, max(gen_data$Total_Rembourse) + 100000000)) +  # Définir les bornes pour l'axe y
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 0.5, size = 10.5),  # Définir la taille du texte de l'axe x
+        axis.text.y = element_text(size = 10.5),  # Définir la taille du texte de l'axe y
+        plot.title = element_text(size = 12, hjust = 0.5)) +
+  geom_text(aes(label = format_labels(Total_Rembourse)), vjust = -0.5, size = 4)+
+  guides(fill = FALSE)  # Supprimer la légende
+```
+
+## Row
+
+### 4
+
+```{r,echo=F}
+
+# Regrouper les données par sexe et faire la somme des montants de remboursements (REM)
+grouped_data <- Base_graphe %>%
+  group_by(sexe) %>%
+  summarise(Total_Rembourse = sum(REM))
+
+# Créer un camembert pour les montants de remboursements par sexe
+ggplot(grouped_data, aes(x = "", y = Total_Rembourse, fill = sexe)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +  # Convertir en graphique en camembert
+  labs(title = "Montants de remboursements par genre",
+       fill = "Sexe") +
+  scale_fill_brewer(palette = "Set3") +  # Utiliser la palette de couleurs Set3
+  theme_void() +  # Supprimer le fond et les axes
+  geom_text(aes(label = format_labels(Total_Rembourse)), position = position_stack(vjust = 0.5), size = 5) +
+  theme(plot.title = element_text(hjust = 0.5),  # Centrer le titre
+        legend.text = element_text(size = 11),   # Ajuster la taille du texte de la légende
+        legend.title = element_text(size = 11)) # Ajuster la taille du titre de la légende
+
+```
+
+### 5
+
+```{r,echo=F}
+
+# Regrouper les données par tranche d'âge (age) et faire la somme des montants de remboursements (REM)
+grouped_data <- Base_graphe %>%
+  group_by(age) %>%
+  summarise(Total_Rembourse = sum(REM))
+
+grouped_data$age[grouped_data$age == "0"] <- "0-19 ans"
+grouped_data$age[grouped_data$age == "20"] <- "20-59 ans"
+grouped_data$age[grouped_data$age == "60"] <- "60 ans et +"
+
+# Créer un histogramme pour le nombre de boîtes achetées par tranche d'âge en utilisant la palette "Set3"
+ggplot(grouped_data, aes(x = age, y = Total_Rembourse, fill = age)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Les montants de remboursements par tranche d'âge",
+       x = "Tranche d'âge",
+       y = "Montant de remboursement (€)") +
+  scale_fill_brewer(palette = "Set3") +  # Utiliser la palette "Set3"
+  scale_y_continuous(limits = c(0, max(grouped_data$Total_Rembourse) + 100000000)) +  # Définir les bornes pour l'axe y
+  theme_minimal() +
+  theme(axis.text.x = element_text(hjust = 0.5, size = 10.5),  # Définir la taille du texte de l'axe x
+        axis.text.y = element_text(size = 10.5),  # Définir la taille du texte de l'axe y
+        plot.title = element_text(size = 12, hjust = 0.5)) +
+  geom_text(aes(label = format_labels(Total_Rembourse)), vjust = -0.5, size = 4)+
+  guides(fill = FALSE)  # Supprimer la légende
+```
+
+### 6
+
+```{r,echo=F}
+
+# Regrouper les données par classe de remboursement (Class_Remb) et faire la somme des montants de remboursements (REM)
+grouped_data <- Base_graphe %>%
+  group_by(Class_Remb) %>%
+  summarise(Total_Rembourse = sum(REM))
+
+
+# Créer un histogramme pour les montants de remboursements par classe 
+ggplot(grouped_data, aes(x = Class_Remb, y = Total_Rembourse, fill = Class_Remb)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Répartition des montants de remboursements par classe",
+       x = "Classe de remboursement",
+       y = "Montant de remboursement (€)") +
+  scale_fill_brewer(palette = "Set3") +  # Utiliser la palette de couleurs Set3
+  scale_y_continuous(limits = c(0, max(grouped_data$Total_Rembourse) + 500000000)) +  # Définir les bornes pour l'axe y
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10.5),  # Définir la taille du texte de l'axe x
+        axis.text.y = element_text(size = 10.5),  # Définir la taille du texte de l'axe y
+        plot.title = element_text(size = 12, hjust = 0.5)) +
+  geom_text(aes(label = format_labels_euro(Total_Rembourse)), vjust = -0.5, size = 3.5) +
+  guides(fill = FALSE)  # Supprimer la légende
+
+```
+
+# Régression linéaire
+
+```{r,include=F}
+Base_graphe$TOP_GEN[Base_graphe$TOP_GEN == "0"] <- "Pas dans une famille de générique"
+Base_graphe$TOP_GEN[Base_graphe$TOP_GEN == "1"] <- "Générique"
+Base_graphe$TOP_GEN[Base_graphe$TOP_GEN == "4"] <- "Princep de la famille des génériques"
+
+Base_graphe$age[Base_graphe$age == "0"] <- "0-19 ans"
+Base_graphe$age[Base_graphe$age == "20"] <- "20-59 ans"
+Base_graphe$age[Base_graphe$age == "60"] <- "60 ans et +"
+
+Base_graphe$sexe[Base_graphe$sexe == "1"] <- "Homme"
+Base_graphe$sexe[Base_graphe$sexe == "2"] <- "Femme"
+
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "05"] <- "Outre-Mer"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "11"] <- "Ile-de-France"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "24"] <- "Centre-Val de Loire"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "27"] <- "Bourgogne-Franche-Comté"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "28"] <- "Normandie"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "32"] <- "Hauts-de-France"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "44"] <- "Grand-Est"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "52"] <- "Pays de la Loire"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "53"] <- "Bretagne"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "75"] <- "Nouvelle Aquitaine"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "76"] <- "Occitanie"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "84"] <- "Auvergne-Rhône-Alpes"
+Base_graphe$BEN_REG[Base_graphe$BEN_REG == "93"] <- "Corse et Provence-Alpes-Côte d'Azur"
+
+names(Base_graphe)[names(Base_graphe) == "BEN_REG"] <- "Region"
+
+Base_graphe$l_ATC1 <- paste0("_", Base_graphe$l_ATC1)
+Base_graphe$TOP_GEN <- paste0("_", Base_graphe$TOP_GEN)
+Base_graphe$age <- paste0("_", Base_graphe$age)
+Base_graphe$sexe <- paste0("_", Base_graphe$sexe)
+Base_graphe$Region <- paste0("_", Base_graphe$Region)
+Base_graphe$Class_Remb <- paste0("_", Base_graphe$Class_Remb)
+
+Base_graphe$BOITES <- as.numeric(Base_graphe$BOITES)
+```
+
+```{r Aggrégation de la base de données, include=F}
+Base_ML <- Base_graphe %>%
+  group_by(l_ATC1, age, sexe, Region, Class_Remb, TOP_GEN) %>%
+  summarize(BOITES = sum(BOITES),
+            REM = sum(REM))
+
+# Conversion des variables catégorielles en facteurs
+variables_categorielles <- c('l_ATC1', 'TOP_GEN', 'age', 'sexe', 'Region', 'Class_Remb')
+
+Base_ML[variables_categorielles] <- lapply(Base_ML[variables_categorielles], factor)
+
+# pour supprimer les lignes avec des valeurs manquantes
+Base_ML <- na.omit(Base_ML)
+```
+
+```{r Division des données en ensembles d entraînement et de test, include=F}
+set.seed(123) 
+index <- createDataPartition(Base_ML$REM, p = 0.8, list = FALSE)
+train_data <- Base_ML[index, ]
+test_data <- Base_ML[-index, ]
+
+# Variables explicatives
+X_train <- train_data[, c('l_ATC1', 'TOP_GEN', 'age', 'sexe', 'Region', 'Class_Remb')]
+X_test <- test_data[, c('l_ATC1', 'TOP_GEN', 'age', 'sexe', 'Region', 'Class_Remb')]
+
+# Convertir les variables catégorielles en facteurs
+X_train0 <- lapply(X_train, as.factor)
+X_test0 <- lapply(X_test, as.factor)
+
+# Appliquer l'encodage one-hot aux variables catégorielles
+X_train <- model.matrix(~ ., data = X_train0)[, -1]
+X_test <- model.matrix(~ ., data = X_test0)[, -1]
+
+# Variable à expliquer
+y_train_REM <- train_data$REM
+y_test_REM <- test_data$REM
+
+y_train_BOITES <- train_data$BOITES
+y_test_BOITES <- test_data$BOITES
+
+# Variable pénalisante
+weights_train_BOITES <- train_data$BOITES
+weights_test_BOITES <- test_data$BOITES
+
+weights_train_REM <- train_data$REM
+weights_test_REM <- test_data$REM
+
+train_data_REM <- train_data[, c('REM', 'l_ATC1', 'TOP_GEN', 'age', 'sexe', 'Region', 'Class_Remb')]
+
+train_data_BOITES <- train_data[, c('BOITES', 'l_ATC1', 'TOP_GEN', 'age', 'sexe', 'Region', 'Class_Remb')]
+```
+
+## Inputs {.sidebar}
+
+### <font size="3"> Modèle de prédictions du nombre de boîtes délivrées </font>
+
+```{r,echo=F}
+# Créer le modèle linéaire
+lin_model_BOITES <- lm(BOITES ~ ., data = train_data_BOITES)
+
+# Prédiction sur l'ensemble des données d'entraînement
+pred_train_BOITES <- predict(lin_model_BOITES, newdata = X_train0)
+# Prédiction sur l'ensemble des données de test
+pred_test_BOITES <- predict(lin_model_BOITES, newdata = X_test0)
+
+# Afficher les résultats sur les données de test
+cat("RMSE:", sqrt(mean((y_test_BOITES - pred_test_BOITES)^2)), "\n")
+cat("MAE:", mean(abs(y_test_BOITES - pred_test_BOITES)), "\n")
+cat("R²:", R2(y_test_BOITES, pred_test_BOITES) * 100, "%\n")
+cat("Variance expliquée:", (1 - var(y_test_BOITES - pred_test_BOITES) / var(y_test_BOITES)) * 100, "%\n")
+```
+
+### <font size="3"> Modèle de prédictions du montant de remboursement </font>
+
+```{r,echo=F}
+# Créer le modèle linéaire
+lin_model_REM <- lm(REM ~ ., data = train_data_REM)
+
+# Prédiction sur l'ensemble des données d'entraînement
+pred_train_REM <- predict(lin_model_REM, newdata = X_train0)
+# Prédiction sur l'ensemble des données de test
+pred_test_REM <- predict(lin_model_REM, newdata = X_test0)
+
+# Afficher les résultats sur les données de test
+cat("RMSE:", sqrt(mean((y_test_REM - pred_test_REM)^2)), "\n")
+cat("MAE:", mean(abs(y_test_REM - pred_test_REM)), "\n")
+cat("R²:", R2(y_test_REM, pred_test_REM) * 100, "%\n")
+cat("Variance expliquée:", (1 - var(y_test_REM - pred_test_REM) / var(y_test_REM)) * 100, "%\n")
+```
+
+## Row
+
+### Prédictions du nombre de boîtes délivrées
+
+```{r,echo=F}
+# Graphique des prédictions vs. valeurs réelles sur les données de test
+plot(y_test_BOITES, pred_test_BOITES, col = "blue", pch = 19, main = "Prédictions vs. Valeurs Réelles - Test",
+     xlab = "Valeurs Réelles", ylab = "Prédictions")
+
+# Ajouter une ligne d'identité pour montrer la relation parfaite
+abline(0, 1, col = "red")
+
+# Légende
+legend("bottomright", legend = "Relation parfaite", col = "red", lty = 1, cex = 0.8)
+```
+
+### Coefficients du modèle de prédictions du nombre de boîtes délivrées
+
+```{r,echo=F}
+# Extraire les coefficients du modèle linéaire
+coefficients <- coef(lin_model_BOITES)
+
+# Convertir la matrice de coefficients en un dataframe
+df <- data.frame(variables = names(coefficients), coefficients = as.numeric(coefficients))
+
+# Supprimer la première ligne, qui correspond à l'intercept
+df <- df[-1, , drop = FALSE]
+
+# Trier le dataframe par magnitude des coefficients
+df <- df[order(abs(df$coefficients), decreasing = TRUE), ]
+df <- df[1:20,]
+df <- df[order(abs(df$coefficients), decreasing = FALSE), ]
+
+# Définir l'interface utilisateur Shiny
+ui <- fluidPage(
+  mainPanel(
+    plotOutput("barplot")
+  )
+)
+
+# Définir le serveur Shiny
+server <- function(input, output) {
+  
+  # Fonction pour générer le graphique à barres
+  output$barplot <- renderPlot({
+    par(mar=c(4,16,2,0))
+    
+    # Créer un graphique à barres avec titres inclinés et texte de taille réduite
+    barplot(df$coefficients, 
+            names.arg = df$variables, 
+            col = ifelse(df$coefficients > 0, "green", "red"),
+            main = "20 coefficients les plus importants", 
+            xlab = "Coefficient Value", 
+            cex.main=1,
+            cex.names = 0.7, 
+            horiz = TRUE, 
+            las = 2)
+  })
+}
+
+# Lancer l'application Shiny
+shinyApp(ui, server)
+```
+
+## Row
+
+### Prédictions du montant de remboursement
+
+```{r,echo=F}
+# Graphique des prédictions vs. valeurs réelles sur les données de test
+plot(y_test_REM, pred_test_REM, col = "blue", pch = 19, main = "Prédictions vs. Valeurs Réelles - Test",
+     xlab = "Valeurs Réelles", ylab = "Prédictions")
+
+# Ajouter une ligne d'identité pour montrer la relation parfaite
+abline(0, 1, col = "red")
+
+# Légende
+legend("bottomright", legend = "Relation parfaite", col = "red", lty = 1, cex = 0.8)
+```
+
+### Coefficients du modèle de prédictions du montant de remboursement
+
+```{r, echo=F}
+# Extraire les coefficients du modèle linéaire
+coefficients <- coef(lin_model_REM)
+
+# Convertir la matrice de coefficients en un dataframe
+df <- data.frame(variables = names(coefficients), coefficients = as.numeric(coefficients))
+
+# Supprimer la première ligne, qui correspond à l'intercept
+df <- df[-1, , drop = FALSE]
+
+# Trier le dataframe par magnitude des coefficients
+df <- df[order(abs(df$coefficients), decreasing = TRUE), ]
+df <- df[1:20,]
+df <- df[order(abs(df$coefficients), decreasing = FALSE), ]
+
+# Définir l'interface utilisateur Shiny
+ui <- fluidPage(
+  mainPanel(
+    plotOutput("barplot")
+  )
+)
+
+# Définir le serveur Shiny
+server <- function(input, output) {
+  
+  # Fonction pour générer le graphique à barres
+  output$barplot <- renderPlot({
+    par(mar=c(4,16,2,0))
+    
+    # Créer un graphique à barres avec titres inclinés et texte de taille réduite
+    barplot(df$coefficients, 
+            names.arg = df$variables, 
+            col = ifelse(df$coefficients > 0, "green", "red"),
+            main = "20 coefficients les plus importants", 
+            xlab = "Coefficient Value", 
+            cex.main=1,
+            cex.names = 0.7, 
+            horiz = TRUE, 
+            las = 2)
+  })
+}
+
+# Lancer l'application Shiny
+shinyApp(ui, server)
+```
+
+
+# Régression Ridge
+
+## Inputs {.sidebar}
+
+### <font size="3"> Modèle de prédictions du nombre de boîtes délivrées </font>
+
+```{r,echo=F}
+# Effectuer la régression Ridge avec cv.glmnet
+ridge_model_BOITES <- cv.glmnet(x = as.matrix(cbind(X_train, weights_train_REM)), y = y_train_BOITES, alpha = 0)
+
+# Sélectionner la meilleure valeur de lambda
+best_lambda <- ridge_model_BOITES$lambda.min
+
+# Prédiction sur l'ensemble des données
+pred_train_BOITES <- predict(ridge_model_BOITES, newx = as.matrix(cbind(X_train, weights_train_REM)), s = best_lambda)
+pred_test_BOITES <- predict(ridge_model_BOITES, newx = as.matrix(cbind(X_test, weights_test_REM)), s = best_lambda)
+
+# Afficher les résultats sur les données de test
+cat("RMSE :", sqrt(mean((y_test_BOITES - pred_test_BOITES)^2)), "\n")
+cat("MAE :", mean(abs(y_test_BOITES - pred_test_BOITES)), "\n")
+cat("R² :", R2(y_test_BOITES, pred_test_BOITES) * 100, "%\n")
+cat("Variance expliquée :", (1 - var(y_test_BOITES - pred_test_BOITES) / var(y_test_BOITES)) * 100, "%\n")
+
+```
+
+### <font size="3"> Modèle de prédictions du montant de remboursement </font>
+
+```{r,echo=F}
+# Effectuer la régression Ridge avec cv.glmnet
+ridge_model_REM <- cv.glmnet(x = as.matrix(cbind(X_train, weights_train_BOITES)), y = y_train_REM, alpha = 0)
+
+# Sélectionner la meilleure valeur de lambda
+best_lambda <- ridge_model_REM$lambda.min
+
+# Prédiction sur l'ensemble des données
+pred_train_REM <- predict(ridge_model_REM, newx = as.matrix(cbind(X_train, weights_train_BOITES)), s = best_lambda)
+pred_test_REM <- predict(ridge_model_REM, newx = as.matrix(cbind(X_test, weights_test_BOITES)), s = best_lambda)
+
+# Afficher les résultats sur les données de test
+cat("RMSE :", sqrt(mean((y_test_REM - pred_test_REM)^2)), "\n")
+cat("MAE :", mean(abs(y_test_REM - pred_test_REM)), "\n")
+cat("R² :", R2(y_test_REM, pred_test_REM) * 100, "%\n")
+cat("Variance expliquée :", (1 - var(y_test_REM - pred_test_REM) / var(y_test_REM)) * 100, "%\n")
+
+```
+
+## Row
+
+### Prédictions du nombre de boîtes délivrées
+
+```{r,echo=F}
+# Graphique des prédictions vs. valeurs réelles sur les données de test
+plot(y_test_BOITES, pred_test_BOITES, col = "blue", pch = 19, main = "Prédictions vs. Valeurs Réelles - Test",
+     xlab = "Valeurs Réelles", ylab = "Prédictions")
+
+# Ajouter une ligne d'identité pour montrer la relation parfaite
+abline(0, 1, col = "red")
+
+# Légende
+legend("bottomright", legend = "Relation parfaite", col = "red", lty = 1, cex = 0.8)
+```
+
+### Coefficients du modèle de prédictions du nombre de boîtes délivrées
+
+```{r,echo=F}
+# Extraire les coefficients du modèle Ridge
+coefficients <- coef(ridge_model_BOITES, s = best_lambda)
+
+# Convertir la matrice de coefficients en un dataframe
+df <- data.frame(variables = rownames(coefficients), coefficients = as.numeric(coefficients))
+
+# Supprimer la première ligne, qui correspond à l'intercept
+df <- df[-1, , drop = FALSE]
+
+# Trier le dataframe par magnitude des coefficients
+df <- df[order(abs(df$coefficients), decreasing = TRUE), ]
+df <- df[1:20,]
+df <- df[order(abs(df$coefficients), decreasing = FALSE), ]
+
+# Définir l'interface utilisateur Shiny
+ui <- fluidPage(
+  mainPanel(
+    plotOutput("barplot")
+  )
+)
+
+# Définir le serveur Shiny
+server <- function(input, output) {
+  
+  # Fonction pour générer le graphique à barres
+  output$barplot <- renderPlot({
+    par(mar=c(4,16,2,0))
+    
+    # Créer un graphique à barres avec titres inclinés et texte de taille réduite
+    barplot(df$coefficients, 
+            names.arg = df$variables, 
+            col = ifelse(df$coefficients > 0, "green", "red"),
+            main = "20 coefficients les plus importants", 
+            xlab = "Coefficient Value", 
+            cex.main=1,
+            cex.names = 0.7, 
+            horiz = TRUE, 
+            las = 2)
+  })
+}
+
+# Lancer l'application Shiny
+shinyApp(ui, server)
+```
+
+## Row
+
+### Prédictions du montant de remboursement
+
+```{r,echo=F}
+# Graphique des prédictions vs. valeurs réelles sur les données de test
+plot(y_test_REM, pred_test_REM, col = "blue", pch = 19, main = "Prédictions vs. Valeurs Réelles - Test",
+     xlab = "Valeurs Réelles", ylab = "Prédictions")
+
+# Ajouter une ligne d'identité pour montrer la relation parfaite
+abline(0, 1, col = "red")
+
+# Légende
+legend("bottomright", legend = "Relation parfaite", col = "red", lty = 1, cex = 0.8)
+```
+
+### Coefficients du modèle de prédictions du montant de remboursement
+
+```{r,echo=F}
+# Extraire les coefficients du modèle Ridge
+coefficients <- coef(ridge_model_REM, s = best_lambda)
+
+# Convertir la matrice de coefficients en un dataframe
+df <- data.frame(variables = rownames(coefficients), coefficients = as.numeric(coefficients))
+
+# Supprimer la première ligne, qui correspond à l'intercept
+df <- df[-1, , drop = FALSE]
+
+# Trier le dataframe par magnitude des coefficients
+df <- df[order(abs(df$coefficients), decreasing = TRUE), ]
+df <- df[1:20,]
+df <- df[order(abs(df$coefficients), decreasing = FALSE), ]
+
+# Définir l'interface utilisateur Shiny
+ui <- fluidPage(
+  mainPanel(
+    plotOutput("barplot")
+  )
+)
+
+# Définir le serveur Shiny
+server <- function(input, output) {
+  
+  # Fonction pour générer le graphique à barres
+  output$barplot <- renderPlot({
+    par(mar=c(4,16,2,0))
+    
+    # Créer un graphique à barres avec titres inclinés et texte de taille réduite
+    barplot(df$coefficients, 
+            names.arg = df$variables, 
+            col = ifelse(df$coefficients > 0, "green", "red"),
+            main = "20 coefficients les plus importants", 
+            xlab = "Coefficient Value", 
+            cex.main=1,
+            cex.names = 0.7, 
+            horiz = TRUE, 
+            las = 2)
+  })
+}
+
+# Lancer l'application Shiny
+shinyApp(ui, server)
+```
+
+# Régression Lasso
+
+## Inputs {.sidebar}
+
+### <font size="3"> Modèle de prédictions du nombre de boîtes délivrées </font>
+
+```{r,echo=F}
+# Effectuer la régression Ridge avec cv.glmnet
+lasso_model_BOITES <- cv.glmnet(x = as.matrix(cbind(X_train, weights_train_REM)), y = y_train_BOITES, alpha = 1)
+
+# Sélectionner la meilleure valeur de lambda
+best_lambda <- lasso_model_BOITES$lambda.min
+
+# Prédiction sur l'ensemble des données
+pred_train_BOITES <- predict(lasso_model_BOITES, newx = as.matrix(cbind(X_train, weights_train_REM)), s = best_lambda)
+pred_test_BOITES <- predict(lasso_model_BOITES, newx = as.matrix(cbind(X_test, weights_test_REM)), s = best_lambda)
+
+# Afficher les résultats sur les données de test
+cat("RMSE :", sqrt(mean((y_test_BOITES - pred_test_BOITES)^2)), "\n")
+cat("MAE :", mean(abs(y_test_BOITES - pred_test_BOITES)), "\n")
+cat("R² :", R2(y_test_BOITES, pred_test_BOITES) * 100, "%\n")
+cat("Variance expliquée :", (1 - var(y_test_BOITES - pred_test_BOITES) / var(y_test_BOITES)) * 100, "%\n")
+
+```
+
+### <font size="3"> Modèle de prédictions du montant de remboursement </font>
+
+```{r,echo=F}
+# Effectuer la régression Ridge avec cv.glmnet
+lasso_model_REM <- cv.glmnet(x = as.matrix(cbind(X_train, weights_train_BOITES)), y = y_train_REM, alpha = 1)
+
+# Sélectionner la meilleure valeur de lambda
+best_lambda <- lasso_model_REM$lambda.min
+
+# Prédiction sur l'ensemble des données
+pred_train_REM <- predict(lasso_model_REM, newx = as.matrix(cbind(X_train, weights_train_BOITES)), s = best_lambda)
+pred_test_REM <- predict(lasso_model_REM, newx = as.matrix(cbind(X_test, weights_test_BOITES)), s = best_lambda)
+
+# Afficher les résultats sur les données de test
+cat("RMSE :", sqrt(mean((y_test_REM - pred_test_REM)^2)), "\n")
+cat("MAE :", mean(abs(y_test_REM - pred_test_REM)), "\n")
+cat("R² :", R2(y_test_REM, pred_test_REM) * 100, "%\n")
+cat("Variance expliquée :", (1 - var(y_test_REM - pred_test_REM) / var(y_test_REM)) * 100, "%\n")
+
+```
+
+## Row
+
+### Prédictions du nombre de boîtes délivrées
+
+```{r,echo=F}
+# Graphique des prédictions vs. valeurs réelles sur les données de test
+plot(y_test_BOITES, pred_test_BOITES, col = "blue", pch = 19, main = "Prédictions vs. Valeurs Réelles - Test",
+     xlab = "Valeurs Réelles", ylab = "Prédictions")
+
+# Ajouter une ligne d'identité pour montrer la relation parfaite
+abline(0, 1, col = "red")
+
+# Légende
+legend("bottomright", legend = "Relation parfaite", col = "red", lty = 1, cex = 0.8)
+```
+
+### Coefficients du modèle de prédictions du nombre de boîtes délivrées
+
+```{r,echo=F}
+# Extraire les coefficients du modèle Ridge
+coefficients <- coef(lasso_model_BOITES, s = best_lambda)
+
+# Convertir la matrice de coefficients en un dataframe
+df <- data.frame(variables = rownames(coefficients), coefficients = as.numeric(coefficients))
+
+# Supprimer la première ligne, qui correspond à l'intercept
+df <- df[-1, , drop = FALSE]
+
+# Trier le dataframe par magnitude des coefficients
+df <- df[order(abs(df$coefficients), decreasing = TRUE), ]
+df <- df[1:20,]
+df <- df[order(abs(df$coefficients), decreasing = FALSE), ]
+
+# Définir l'interface utilisateur Shiny
+ui <- fluidPage(
+  mainPanel(
+    plotOutput("barplot")
+  )
+)
+
+# Définir le serveur Shiny
+server <- function(input, output) {
+  
+  # Fonction pour générer le graphique à barres
+  output$barplot <- renderPlot({
+    par(mar=c(4,16,2,0))
+    
+    # Créer un graphique à barres avec titres inclinés et texte de taille réduite
+    barplot(df$coefficients, 
+            names.arg = df$variables, 
+            col = ifelse(df$coefficients > 0, "green", "red"),
+            main = "20 coefficients les plus importants", 
+            xlab = "Coefficient Value", 
+            cex.main=1,
+            cex.names = 0.7, 
+            horiz = TRUE, 
+            las = 2)
+  })
+}
+
+# Lancer l'application Shiny
+shinyApp(ui, server)
+```
+
+## Row
+
+### Prédictions du montant de remboursement
+
+```{r,echo=F}
+# Graphique des prédictions vs. valeurs réelles sur les données de test
+plot(y_test_REM, pred_test_REM, col = "blue", pch = 19, main = "Prédictions vs. Valeurs Réelles - Test",
+     xlab = "Valeurs Réelles", ylab = "Prédictions")
+
+# Ajouter une ligne d'identité pour montrer la relation parfaite
+abline(0, 1, col = "red")
+
+# Légende
+legend("bottomright", legend = "Relation parfaite", col = "red", lty = 1, cex = 0.8)
+```
+
+### Coefficients du modèle de prédictions du montant de remboursement
+
+```{r,echo=F}
+# Extraire les coefficients du modèle Ridge
+coefficients <- coef(lasso_model_REM, s = best_lambda)
+
+# Convertir la matrice de coefficients en un dataframe
+df <- data.frame(variables = rownames(coefficients), coefficients = as.numeric(coefficients))
+
+# Supprimer la première ligne, qui correspond à l'intercept
+df <- df[-1, , drop = FALSE]
+
+# Trier le dataframe par magnitude des coefficients
+df <- df[order(abs(df$coefficients), decreasing = TRUE), ]
+df <- df[1:20,]
+df <- df[order(abs(df$coefficients), decreasing = FALSE), ]
+
+# Définir l'interface utilisateur Shiny
+ui <- fluidPage(
+  mainPanel(
+    plotOutput("barplot")
+  )
+)
+
+# Définir le serveur Shiny
+server <- function(input, output) {
+  
+  # Fonction pour générer le graphique à barres
+  output$barplot <- renderPlot({
+    par(mar=c(4,16,2,0))
+    
+    # Créer un graphique à barres avec titres inclinés et texte de taille réduite
+    barplot(df$coefficients, 
+            names.arg = df$variables, 
+            col = ifelse(df$coefficients > 0, "green", "red"),
+            main = "20 coefficients les plus importants", 
+            xlab = "Coefficient Value", 
+            cex.main=1,
+            cex.names = 0.7, 
+            horiz = TRUE, 
+            las = 2)
+  })
+}
+
+# Lancer l'application Shiny
+shinyApp(ui, server)
+```
+
+
+
+
