@@ -16,4 +16,4 @@ L'offre Open Medic s’articule autour de deux types de jeux de données :
 
 
 ## Lien vers les données du projet : https://drive.google.com/drive/folders/1sxhrucE7rCNcGtS0khf-VeanUkjy6MID?usp=drive_link
-## Lien vers l'application du projet
+## Lien vers l'application du projet : 
