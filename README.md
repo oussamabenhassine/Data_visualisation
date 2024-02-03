@@ -13,7 +13,7 @@ Les données sur le médicament sont restituées au travers de la classification
  
 
 ## Lien vers les données du projet : 
-Le fichier principal du projet (OPEN_MEDIC_2022.CSV) est accessible sur Drive via ce <a href="[https://example.com/](https://drive.google.com/drive/folders/1sxhrucE7rCNcGtS0khf-VeanUkjy6MID?usp=drive_link )">Lien</a> , car sa taille importante ne permet pas son hébergement sur GitHub.
+Le fichier principal du projet (OPEN_MEDIC_2022.CSV) est accessible sur Drive via ce <a href="https://drive.google.com/drive/folders/1sxhrucE7rCNcGtS0khf-VeanUkjy6MID?usp=drive_link">Lien</a> , car sa taille importante ne permet pas son hébergement sur GitHub.
 
 
 ## Lien vers l'application du projet : 
