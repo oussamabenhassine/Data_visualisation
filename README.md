@@ -1,6 +1,6 @@
 # Dépenses de médicaments en 2022
 ## Source :
-https://assurance-maladie.ameli.fr/etudes-et-donnees/open-medic-base-complete-depenses-medicaments?fbclid=IwAR1emDE4Ihukxr0LYGxsPEWHubklRMiDnf_FfxENRs6uFjfDVPD8G0Irf0Y
+<a href="[https://example.com/](https://assurance-maladie.ameli.fr/etudes-et-donnees/open-medic-base-complete-depenses-medicaments?fbclid=IwAR1emDE4Ihukxr0LYGxsPEWHubklRMiDnf_FfxENRs6uFjfDVPD8G0Irf0Y)">Source des données</a>
 
 Cette base de données annuelle (Open Medic) présente les remboursements de médicaments délivrés en ville, effectués par l'ensemble des régimes d'assurance maladie (base complète).
 
