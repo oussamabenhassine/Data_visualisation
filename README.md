@@ -17,3 +17,5 @@ Le fichier principal du projet (OPEN_MEDIC_2022.CSV) est accessible sur Drive vi
 
 
 ## Lien vers l'application du projet : 
+<a href="https://oussama-benhassine.shinyapps.io/projet/">Application web</a>
+
